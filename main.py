@@ -2,8 +2,8 @@
 import os
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, Depends
-from fastapi.responses import JSONResponse
+from fastapi import FastAPI, Depends, Request
+from fastapi.responses import JSONResponse, Response
 from fastapi.encoders import jsonable_encoder
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel
@@ -26,18 +26,33 @@ if not SUPABASE_URL or not SUPABASE_KEY:
         "SUPABASE_URL and SUPABASE_KEY must be set in the .env file."
     )
 
-# Connect to Supabase
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-# Create FastAPI application
 app = FastAPI(
     title="FlyRank Auth API",
     description="A secure authentication API using FastAPI and Supabase Auth.",
     version="1.0.0",
 )
 
-# Bearer authentication scheme for protected routes
+# Reusable Bearer authentication scheme
 security = HTTPBearer(auto_error=False)
+
+
+# ============================================================
+# AUTHENTICATION ERROR HANDLING
+# ============================================================
+
+class AuthError(Exception):
+    def __init__(self, message: str):
+        self.message = message
+
+
+@app.exception_handler(AuthError)
+async def auth_error_handler(request: Request, exc: AuthError):
+    return JSONResponse(
+        status_code=401,
+        content={"error": exc.message},
+    )
 
 
 # ============================================================
@@ -173,51 +188,71 @@ def public_info():
 
 
 # ============================================================
-# STAGE 3: VERIFIED PROTECTED PROFILE ROUTE
+# STAGE 3 & 4: REUSABLE AUTHENTICATION DEPENDENCY
 # ============================================================
 
-@app.get("/protected/profile")
-def protected_profile(
+def get_current_user(
     credentials: HTTPAuthorizationCredentials | None = Depends(security)
 ):
-
     # Check whether a Bearer token was provided
     if credentials is None:
-        return JSONResponse(
-            status_code=401,
-            content={"error": "Access token required"},
-        )
+        raise AuthError("Access token required")
 
-    # Extract the access token
     token = credentials.credentials
 
     if not token.strip():
-        return JSONResponse(
-            status_code=401,
-            content={"error": "Access token required"},
-        )
+        raise AuthError("Access token required")
 
     try:
-        # Ask Supabase to validate the JWT and retrieve the user
+        # Verify the JWT with Supabase
         response = supabase.auth.get_user(token)
 
         user = response.user
 
         if user is None:
-            return JSONResponse(
-                status_code=401,
-                content={"error": "Invalid or expired token"},
-            )
+            raise AuthError("Invalid or expired token")
 
-        # Return verified user information
-        return {
-            "id": str(user.id),
-            "email": user.email,
-            "created_at": user.created_at,
-        }
+        return user
 
     except AuthApiError:
-        return JSONResponse(
-            status_code=401,
-            content={"error": "Invalid or expired token"},
-        )
+        raise AuthError("Invalid or expired token")
+
+
+# ============================================================
+# STAGE 4: PROTECTED PROFILE ROUTE
+# ============================================================
+
+@app.get("/protected/profile")
+def protected_profile(user=Depends(get_current_user)):
+    return {
+        "id": str(user.id),
+        "email": user.email,
+        "created_at": user.created_at,
+    }
+
+
+# ============================================================
+# STAGE 4: PROTECTED DASHBOARD ROUTE
+# ============================================================
+
+@app.get("/protected/dashboard")
+def protected_dashboard(user=Depends(get_current_user)):
+    return {
+        "message": "Welcome to your protected dashboard!",
+        "user": {
+            "id": str(user.id),
+            "email": user.email,
+        },
+    }
+
+
+# ============================================================
+# STAGE 4: LOGOUT ROUTE
+# ============================================================
+
+@app.post("/auth/logout", status_code=204)
+def logout(user=Depends(get_current_user)):
+    # The dependency verifies the access token first.
+    # Return 204 No Content after successful authentication.
+    # Note: This endpoint does not revoke the access JWT itself.
+    return Response(status_code=204)
