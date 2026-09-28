@@ -2,14 +2,19 @@
 import os
 
 from dotenv import load_dotenv
-from fastapi import FastAPI
+from fastapi import FastAPI, Depends
 from fastapi.responses import JSONResponse
 from fastapi.encoders import jsonable_encoder
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel
 from supabase import create_client, Client
 from gotrue.errors import AuthApiError
 
-# Load environment variables from .env
+
+# ============================================================
+# STAGE 0: SETUP AND SUPABASE CONNECTION
+# ============================================================
+
 load_dotenv()
 
 SUPABASE_URL = os.getenv("SUPABASE_URL")
@@ -24,21 +29,30 @@ if not SUPABASE_URL or not SUPABASE_KEY:
 # Connect to Supabase
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-# Create FastAPI application
+# FastAPI application
 app = FastAPI(
     title="FlyRank Auth API",
     description="A secure authentication API using FastAPI and Supabase Auth.",
     version="1.0.0",
 )
 
+# Bearer authentication scheme for protected routes
+security = HTTPBearer(auto_error=False)
 
-# Request body for signup and login
+
+# ============================================================
+# REQUEST MODEL
+# ============================================================
+
 class AuthCredentials(BaseModel):
     email: str | None = None
     password: str | None = None
 
 
-# Stage 0 routes
+# ============================================================
+# STAGE 0: BASIC ROUTES
+# ============================================================
+
 @app.get("/")
 def root():
     return {
@@ -55,9 +69,13 @@ def health():
     }
 
 
-# Stage 1: Sign up
+# ============================================================
+# STAGE 1: SIGN UP
+# ============================================================
+
 @app.post("/auth/signup", status_code=201)
 def signup(body: AuthCredentials | None = None):
+
     # Check for missing or blank credentials
     if (
         body is None
@@ -93,13 +111,19 @@ def signup(body: AuthCredentials | None = None):
     except AuthApiError:
         return JSONResponse(
             status_code=400,
-            content={"error": "Signup failed. Check the email and password."},
+            content={
+                "error": "Signup failed. Check the email and password."
+            },
         )
 
 
-# Stage 1: Log in
+# ============================================================
+# STAGE 1: LOG IN
+# ============================================================
+
 @app.post("/auth/login")
 def login(body: AuthCredentials | None = None):
+
     # Check for missing or blank credentials
     if (
         body is None
@@ -137,3 +161,50 @@ def login(body: AuthCredentials | None = None):
             status_code=401,
             content={"error": "Invalid login credentials"},
         )
+
+
+# ============================================================
+# STAGE 2: PUBLIC ROUTE
+# ============================================================
+
+@app.get("/public/info")
+def public_info():
+    return {
+        "message": "Welcome stranger! This info is public."
+    }
+
+
+# ============================================================
+# STAGE 2: PROTECTED PROFILE ROUTE
+# Token format check only. Verification comes in Stage 3.
+# ============================================================
+
+@app.get("/protected/profile")
+def protected_profile(
+    credentials: HTTPAuthorizationCredentials | None = Depends(security)
+):
+
+    # Check whether a Bearer token was provided
+    if credentials is None:
+        return JSONResponse(
+            status_code=401,
+            content={"error": "Access token required"},
+        )
+
+    # Extract the token
+    token = credentials.credentials
+
+    if not token.strip():
+        return JSONResponse(
+            status_code=401,
+            content={"error": "Access token required"},
+        )
+
+    # Stage 2 only checks that a token was provided.
+    # Actual token verification will be added in Stage 3.
+    return {
+        "message": (
+            "Bearer token received. "
+            "Token verification will be added in Stage 3."
+        )
+    }
