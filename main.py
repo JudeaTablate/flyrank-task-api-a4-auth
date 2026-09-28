@@ -1,9 +1,15 @@
+
 import os
 
 from dotenv import load_dotenv
 from fastapi import FastAPI
+from fastapi.responses import JSONResponse
+from fastapi.encoders import jsonable_encoder
+from pydantic import BaseModel
 from supabase import create_client, Client
+from gotrue.errors import AuthApiError
 
+# Load environment variables from .env
 load_dotenv()
 
 SUPABASE_URL = os.getenv("SUPABASE_URL")
@@ -15,8 +21,10 @@ if not SUPABASE_URL or not SUPABASE_KEY:
         "SUPABASE_URL and SUPABASE_KEY must be set in the .env file."
     )
 
+# Connect to Supabase
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
+# Create FastAPI application
 app = FastAPI(
     title="FlyRank Auth API",
     description="A secure authentication API using FastAPI and Supabase Auth.",
@@ -24,6 +32,13 @@ app = FastAPI(
 )
 
 
+# Request body for signup and login
+class AuthCredentials(BaseModel):
+    email: str | None = None
+    password: str | None = None
+
+
+# Stage 0 routes
 @app.get("/")
 def root():
     return {
@@ -38,3 +53,87 @@ def health():
         "status": "ok",
         "supabase_configured": True,
     }
+
+
+# Stage 1: Sign up
+@app.post("/auth/signup", status_code=201)
+def signup(body: AuthCredentials | None = None):
+    # Check for missing or blank credentials
+    if (
+        body is None
+        or not body.email
+        or not body.email.strip()
+        or not body.password
+        or not body.password.strip()
+    ):
+        return JSONResponse(
+            status_code=400,
+            content={"error": "Email and password are required"},
+        )
+
+    try:
+        response = supabase.auth.sign_up(
+            {
+                "email": body.email.strip(),
+                "password": body.password,
+            }
+        )
+
+        if response.user is None:
+            return JSONResponse(
+                status_code=400,
+                content={"error": "Signup failed"},
+            )
+
+        return JSONResponse(
+            status_code=201,
+            content=jsonable_encoder(response.user),
+        )
+
+    except AuthApiError:
+        return JSONResponse(
+            status_code=400,
+            content={"error": "Signup failed. Check the email and password."},
+        )
+
+
+# Stage 1: Log in
+@app.post("/auth/login")
+def login(body: AuthCredentials | None = None):
+    # Check for missing or blank credentials
+    if (
+        body is None
+        or not body.email
+        or not body.email.strip()
+        or not body.password
+        or not body.password.strip()
+    ):
+        return JSONResponse(
+            status_code=400,
+            content={"error": "Email and password are required"},
+        )
+
+    try:
+        response = supabase.auth.sign_in_with_password(
+            {
+                "email": body.email.strip(),
+                "password": body.password,
+            }
+        )
+
+        if response.session is None:
+            return JSONResponse(
+                status_code=401,
+                content={"error": "Invalid login credentials"},
+            )
+
+        return {
+            "access_token": response.session.access_token,
+            "refresh_token": response.session.refresh_token,
+        }
+
+    except AuthApiError:
+        return JSONResponse(
+            status_code=401,
+            content={"error": "Invalid login credentials"},
+        )
