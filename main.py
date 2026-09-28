@@ -29,7 +29,7 @@ if not SUPABASE_URL or not SUPABASE_KEY:
 # Connect to Supabase
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-# FastAPI application
+# Create FastAPI application
 app = FastAPI(
     title="FlyRank Auth API",
     description="A secure authentication API using FastAPI and Supabase Auth.",
@@ -76,7 +76,6 @@ def health():
 @app.post("/auth/signup", status_code=201)
 def signup(body: AuthCredentials | None = None):
 
-    # Check for missing or blank credentials
     if (
         body is None
         or not body.email
@@ -124,7 +123,6 @@ def signup(body: AuthCredentials | None = None):
 @app.post("/auth/login")
 def login(body: AuthCredentials | None = None):
 
-    # Check for missing or blank credentials
     if (
         body is None
         or not body.email
@@ -175,8 +173,7 @@ def public_info():
 
 
 # ============================================================
-# STAGE 2: PROTECTED PROFILE ROUTE
-# Token format check only. Verification comes in Stage 3.
+# STAGE 3: VERIFIED PROTECTED PROFILE ROUTE
 # ============================================================
 
 @app.get("/protected/profile")
@@ -191,7 +188,7 @@ def protected_profile(
             content={"error": "Access token required"},
         )
 
-    # Extract the token
+    # Extract the access token
     token = credentials.credentials
 
     if not token.strip():
@@ -200,11 +197,27 @@ def protected_profile(
             content={"error": "Access token required"},
         )
 
-    # Stage 2 only checks that a token was provided.
-    # Actual token verification will be added in Stage 3.
-    return {
-        "message": (
-            "Bearer token received. "
-            "Token verification will be added in Stage 3."
+    try:
+        # Ask Supabase to validate the JWT and retrieve the user
+        response = supabase.auth.get_user(token)
+
+        user = response.user
+
+        if user is None:
+            return JSONResponse(
+                status_code=401,
+                content={"error": "Invalid or expired token"},
+            )
+
+        # Return verified user information
+        return {
+            "id": str(user.id),
+            "email": user.email,
+            "created_at": user.created_at,
+        }
+
+    except AuthApiError:
+        return JSONResponse(
+            status_code=401,
+            content={"error": "Invalid or expired token"},
         )
-    }
